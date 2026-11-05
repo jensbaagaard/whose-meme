@@ -42,7 +42,7 @@ sudo apt-get install -y nodejs nginx
 
 # App
 sudo useradd --system --home /opt/whose-meme whosememe
-sudo git clone https://github.com/<owner>/whose-meme.git /opt/whose-meme
+sudo git clone https://github.com/jensbaagaard/whose-meme.git /opt/whose-meme
 cd /opt/whose-meme && sudo npm ci --omit=dev
 
 # Service (see deploy/whose-meme.service)

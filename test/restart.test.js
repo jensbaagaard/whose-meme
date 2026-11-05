@@ -97,6 +97,7 @@ test('a running game survives a restart and a crash', async (t) => {
   assert.deepEqual(scores, { [guesser]: 1, [owner]: 1, [third]: 0 });
 
   // A hard crash after the batch window still keeps the latest state.
+  await send(host2, 'host:skipDoodle'); // the guesser won the doodle; skip it
   await send(host2, 'host:next');
   await stateWhere(host2, (s) => s.phase === 'guessing' && s.round.number === 2);
   await sleep(500);

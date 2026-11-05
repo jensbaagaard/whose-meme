@@ -7,8 +7,11 @@ A party game for one big screen and a bunch of phones.
 3. The host starts the game. The big screen shows one random meme link at a time; click it to open the meme.
 4. Everyone taps the **face** of whoever they think posted it. The uploader has to pick someone too, as a bluff, so nobody can tell from the locked-in count.
 5. Once everyone has locked in (or the host hits *Reveal now*), the big screen shows who it was and who guessed what.
+6. **The doodle:** one random correct guesser picks someone else's face and vandalises it on their phone with a pen, emoji stickers and a new name. Everyone watches it happen live on the big screen, and the victim's phone says "😱 … is drawing on YOUR face!". The result becomes that player's photo and name for the rest of the game (15s to pick, 45s to draw; the host can skip).
 
 **Scoring:** +1 for a correct guess, and the uploader gets +1 for every player they fooled.
+
+**Other silly bits:** 🎲 random silly names, renaming yourself in the lobby (tap your name), emoji reactions from phones that float up the big screen with your face on them, confetti, and awards at the end (🕵️ Sherlock, 🎭 Master of Disguise, 🤡 Most Gullible, 🎨 Picasso, 🖍️ Human Canvas).
 
 ## Run locally
 

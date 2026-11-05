@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
-const { Room, GameError } = require('./src/game');
+const { Room, GameError, REACTIONS } = require('./src/game');
 const { RoomStore } = require('./src/store');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -65,12 +65,13 @@ app.get('/host', (req, res) => res.sendFile(path.join(__dirname, 'public', 'host
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 128 * 1024 }); // room for one small selfie
+const io = new Server(server, { maxHttpBufferSize: 256 * 1024 }); // room for one selfie or doodle
 
 // --- realtime ----------------------------------------------------------------
 
 const hostChannel = (code) => `host:${code}`;
 const playerChannel = (code, playerId) => `player:${code}:${playerId}`;
+const roomChannel = (code) => `room:${code}`; // every screen in the room: host and phones
 
 function broadcast(room) {
   io.to(hostChannel(room.code)).emit('state', room.hostView());
@@ -115,11 +116,23 @@ function playerRoom(socket) {
   return room;
 }
 
+// Puts a socket into a room, as the host screen (no playerId) or as one player.
+function attach(socket, room, playerId) {
+  detach(socket);
+  socket.data = playerId ? { role: 'player', code: room.code, playerId } : { role: 'host', code: room.code };
+  socket.join(playerId ? playerChannel(room.code, playerId) : hostChannel(room.code));
+  socket.join(roomChannel(room.code));
+  if (playerId) room.setConnected(playerId, true);
+  // Someone is mid-doodle: catch this screen up on the strokes so far.
+  if (room.doodle) socket.emit('doodle:replay', { id: room.doodle.id, segments: room.doodle.segments });
+}
+
 // Moves a socket out of whatever room it was attached to before.
 function detach(socket) {
   const { code, role, playerId } = socket.data;
   if (!code) return;
   const room = rooms.get(code);
+  socket.leave(roomChannel(code));
   if (role === 'host') socket.leave(hostChannel(code));
   if (role === 'player') {
     socket.leave(playerChannel(code, playerId));
@@ -134,20 +147,16 @@ io.on('connection', (socket) => {
 
   socket.on('host:create', handler(socket, () => {
     if (rooms.size >= MAX_ROOMS) throw new GameError('The server is full right now, try again later.');
-    detach(socket);
     const room = new Room(newRoomCode());
     rooms.set(room.code, room);
-    socket.data = { role: 'host', code: room.code };
-    socket.join(hostChannel(room.code));
+    attach(socket, room);
     return { code: room.code, hostToken: room.hostToken };
   }));
 
   socket.on('host:resume', handler(socket, ({ code, hostToken }) => {
     const room = getRoom(code);
     if (room.hostToken !== hostToken) throw new GameError('That room belongs to another screen.');
-    detach(socket);
-    socket.data = { role: 'host', code: room.code };
-    socket.join(hostChannel(room.code));
+    attach(socket, room);
     return { code: room.code };
   }));
 
@@ -156,6 +165,7 @@ io.on('connection', (socket) => {
   socket.on('host:next', handler(socket, () => hostRoom(socket).next()));
   socket.on('host:end', handler(socket, () => hostRoom(socket).end()));
   socket.on('host:playAgain', handler(socket, () => hostRoom(socket).playAgain()));
+  socket.on('host:skipDoodle', handler(socket, () => hostRoom(socket).cancelDoodle()));
 
   socket.on('host:kick', handler(socket, ({ playerId }) => {
     const room = hostRoom(socket);
@@ -168,17 +178,16 @@ io.on('connection', (socket) => {
     const room = getRoom(code);
     if (typeof token !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(token)) throw new GameError('Bad player token.');
     const player = room.join(token, name, photo);
-    if (socket.data.code !== room.code || socket.data.playerId !== player.id) {
-      detach(socket);
-      socket.data = { role: 'player', code: room.code, playerId: player.id };
-      socket.join(playerChannel(room.code, player.id));
-      room.setConnected(player.id, true);
-    }
+    if (socket.data.code !== room.code || socket.data.playerId !== player.id) attach(socket, room, player.id);
     return { code: room.code, playerId: player.id };
   }));
 
   socket.on('player:setPhoto', handler(socket, ({ photo }) => {
     playerRoom(socket).setPhoto(socket.data.playerId, photo);
+  }));
+
+  socket.on('player:rename', handler(socket, ({ name }) => {
+    playerRoom(socket).rename(socket.data.playerId, name);
   }));
 
   socket.on('player:leave', handler(socket, () => {
@@ -201,8 +210,61 @@ io.on('connection', (socket) => {
     if (room.everyoneGuessed()) room.reveal();
   }));
 
+  // --- the doodle: a random correct guesser vandalises someone's face ---
+
+  socket.on('doodle:pick', handler(socket, ({ targetId }) => {
+    playerRoom(socket).pickDoodleTarget(socket.data.playerId, targetId);
+  }));
+
+  socket.on('doodle:done', handler(socket, ({ photo, name }) => {
+    playerRoom(socket).finishDoodle(socket.data.playerId, { photo, name });
+  }));
+
+  // Strokes stream in many times a second, so they skip the save + full-state broadcast other events get.
+  // A dropped stroke isn't worth bothering anyone about, so errors are ignored.
+  socket.on('doodle:segment', (seg) => {
+    try {
+      const room = playerRoom(socket);
+      const clean = room.addDoodleSegment(socket.data.playerId, seg);
+      socket.to(roomChannel(room.code)).emit('doodle:segment', { id: room.doodle.id, seg: clean });
+    } catch {}
+  });
+
+  socket.on('doodle:undo', (payload) => {
+    try {
+      const room = playerRoom(socket);
+      const strokeId = payload && payload.s;
+      room.undoDoodleStroke(socket.data.playerId, strokeId);
+      socket.to(roomChannel(room.code)).emit('doodle:undo', { id: room.doodle.id, s: strokeId });
+    } catch {}
+  });
+
+  // Emoji reactions float up the big screen. A few per second per phone is plenty.
+  socket.on('react', (payload) => {
+    try {
+      const room = playerRoom(socket);
+      const emoji = payload && payload.e;
+      if (!REACTIONS.includes(emoji)) return;
+      const now = Date.now();
+      socket.data.reactedAt = (socket.data.reactedAt || []).filter((t) => now - t < 2000);
+      if (socket.data.reactedAt.length >= 6) return;
+      socket.data.reactedAt.push(now);
+      io.to(hostChannel(room.code)).emit('reaction', { e: emoji, playerId: socket.data.playerId });
+    } catch {}
+  });
+
   socket.on('disconnect', () => detach(socket));
 });
+
+// The artist ran out of time and their phone never sent the picture (closed, asleep, ...): move on.
+setInterval(() => {
+  for (const room of rooms.values()) {
+    if (room.doodleExpired()) {
+      room.cancelDoodle();
+      broadcast(room);
+    }
+  }
+}, 1000).unref();
 
 // Forget rooms nobody has touched in a while (including ones that went stale while we were down).
 function expireRooms() {

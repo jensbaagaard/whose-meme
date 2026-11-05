@@ -2,9 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Room, GameError, cleanUrl, cleanPhoto } = require('../src/game');
+const { Room, GameError, DOODLE, cleanUrl, cleanPhoto, cleanSegment } = require('../src/game');
 
 const PHOTO = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString('base64')}`;
+const DOODLED = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0xd0, 0x0d]).toString('base64')}`;
 
 function roomWith(...names) {
   const room = new Room('TEST');
@@ -29,8 +30,8 @@ test('cleanPhoto only accepts small JPEG data URLs', () => {
   assert.ok(cleanPhoto(PHOTO) instanceof Buffer);
   assert.throws(() => cleanPhoto('data:image/png;base64,iVBORw0KGgo='), GameError);
   assert.throws(() => cleanPhoto(`data:image/jpeg;base64,${Buffer.from('<svg>').toString('base64')}`), GameError);
-  const huge = Buffer.alloc(70 * 1024, 0xff);
-  assert.throws(() => cleanPhoto(`data:image/jpeg;base64,${huge.toString('base64')}`), GameError);
+  const huge = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(130 * 1024)]);
+  assert.throws(() => cleanPhoto(`data:image/jpeg;base64,${huge.toString('base64')}`), /too big/);
   assert.throws(() => cleanPhoto(undefined), GameError);
 });
 
@@ -93,6 +94,9 @@ test('a full round: guesses, auto-reveal condition, scoring and the bluff', () =
   const { results } = room.hostView().round.reveal;
   assert.equal(results.length, 2, "the uploader's bluff is not shown");
 
+  assert.equal(room.doodle.artistId, bob.id, 'the only correct guesser gets the doodle');
+  assert.throws(() => room.next(), /doodle/);
+  room.cancelDoodle();
   room.next();
   assert.equal(room.phase, 'over');
   assert.deepEqual(
@@ -180,4 +184,135 @@ test('a room survives a snapshot round trip mid-round', () => {
   assert.equal(copy.everyoneGuessed(), true);
   copy.reveal();
   assert.equal(copy.players.get(guesser.id).score, 1);
+});
+
+// Sets up a 4-player round where Bob, Cara and Dan all guess Alice correctly.
+function revealedRound() {
+  const { room, players } = roomWith('Alice', 'Bob', 'Cara', 'Dan');
+  const [alice, bob, cara, dan] = players;
+  room.addMeme(alice.id, 'https://example.com/alice');
+  room.start();
+  for (const p of [bob, cara, dan]) room.guess(p.id, alice.id);
+  room.guess(alice.id, bob.id);
+  room.reveal();
+  return { room, alice, bob, cara, dan };
+}
+
+test('the doodle goes to a random correct guesser, never to a wrong one', () => {
+  const seen = new Set();
+  for (let i = 0; i < 60; i++) {
+    const { room, alice, bob, cara, dan } = revealedRound();
+    assert.ok([bob.id, cara.id, dan.id].includes(room.doodle.artistId));
+    assert.notEqual(room.doodle.artistId, alice.id, 'the uploader never wins it');
+    seen.add(room.players.get(room.doodle.artistId).name);
+  }
+  assert.equal(seen.size, 3, `all three correct guessers should win sometimes (saw ${[...seen]})`);
+});
+
+test('nobody correct means no doodle', () => {
+  const { room, players } = roomWith('Alice', 'Bob', 'Cara');
+  const [alice, bob, cara] = players;
+  room.addMeme(alice.id, 'https://example.com/alice');
+  room.start();
+  room.guess(bob.id, cara.id);
+  room.guess(cara.id, bob.id);
+  room.reveal();
+  assert.equal(room.doodle, null);
+  room.next(); // not blocked
+});
+
+test('doodle flow: pick a victim, draw, rename, finish', () => {
+  const { room } = revealedRound();
+  const artist = room.players.get(room.doodle.artistId);
+  const victim = [...room.players.values()].find((p) => p.id !== artist.id && p.name !== 'Alice');
+  const outsider = [...room.players.values()].find((p) => p.id !== artist.id && p.id !== victim.id);
+
+  assert.throws(() => room.pickDoodleTarget(outsider.id, victim.id), /not your turn/);
+  assert.throws(() => room.addDoodleSegment(artist.id, { s: 'a', c: DOODLE.colors[0], w: DOODLE.widths[0], p: [0, 0] }), /Pick a face/);
+  assert.throws(() => room.pickDoodleTarget(artist.id, artist.id), /someone else/);
+  room.pickDoodleTarget(artist.id, victim.id);
+  assert.throws(() => room.pickDoodleTarget(artist.id, outsider.id), /already picked/);
+
+  room.addDoodleSegment(artist.id, { s: 'a', c: DOODLE.colors[2], w: DOODLE.widths[1], p: [0.1, 0.1, 0.5, 0.5] });
+  room.addDoodleSegment(artist.id, { s: 'b', e: DOODLE.stickers[0], z: DOODLE.stickerSizes[1], x: 0.5, y: 0.4 });
+  room.undoDoodleStroke(artist.id, 'b');
+  assert.deepEqual(room.doodle.segments.map((s) => s.s), ['a']);
+
+  const views = { artist: room.playerView(artist.id).doodle, victim: room.playerView(victim.id).doodle, host: room.hostView().doodle };
+  assert.equal(views.artist.isArtist, true);
+  assert.ok(views.artist.tools, 'only the artist gets the tools');
+  assert.equal(views.victim.isTarget, true);
+  assert.equal(views.victim.tools, undefined);
+  assert.equal(views.host.targetName, victim.name);
+  assert.ok(!JSON.stringify(views.host).includes('segments'), 'strokes are streamed, not put in every state');
+
+  assert.throws(() => room.finishDoodle(artist.id, { photo: DOODLED, name: outsider.name }), /already has that name/);
+  const oldName = victim.name;
+  const version = victim.photoVersion;
+  room.finishDoodle(artist.id, { photo: DOODLED, name: 'Sir Soggy Toast' });
+  assert.equal(room.doodle, null);
+  assert.equal(victim.name, 'Sir Soggy Toast');
+  assert.equal(victim.photoVersion, version + 1);
+  assert.deepEqual(victim.photo, Buffer.from(DOODLED.split(',')[1], 'base64'));
+  assert.deepEqual(room.hostView().round.reveal.doodle, { artistId: artist.id, targetId: victim.id, oldName, newName: 'Sir Soggy Toast' });
+  room.next();
+});
+
+test('finishing without a new name keeps the old one', () => {
+  const { room } = revealedRound();
+  const artistId = room.doodle.artistId;
+  const victim = [...room.players.values()].find((p) => p.id !== artistId);
+  const name = victim.name;
+  room.pickDoodleTarget(artistId, victim.id);
+  room.finishDoodle(artistId, { photo: DOODLED, name: '   ' });
+  assert.equal(victim.name, name);
+  assert.equal(room.round.results.doodle.newName, null);
+});
+
+test('doodle strokes are checked and squashed into the picture', () => {
+  const pen = { s: 'abc', c: DOODLE.colors[0], w: DOODLE.widths[0] };
+  assert.deepEqual(cleanSegment({ ...pen, p: [-1, 2, 0.12345, 0.5] }).p, [0, 1, 0.123, 0.5]);
+  assert.throws(() => cleanSegment({ ...pen, c: 'red', p: [0, 0] }), /brush/);
+  assert.throws(() => cleanSegment({ ...pen, w: 5, p: [0, 0] }), /brush/);
+  assert.throws(() => cleanSegment({ ...pen, p: [0, 0, 1] }), /stroke/);
+  assert.throws(() => cleanSegment({ ...pen, p: [0, NaN] }), /stroke/);
+  assert.throws(() => cleanSegment({ ...pen, p: new Array(2000).fill(0) }), /stroke/);
+  assert.throws(() => cleanSegment({ ...pen, s: '<script>', p: [0, 0] }), /stroke/);
+  assert.throws(() => cleanSegment({ s: 'a', e: '<img>', z: DOODLE.stickerSizes[0], x: 0, y: 0 }), /sticker/);
+  assert.deepEqual(cleanSegment({ s: 'a', e: '👑', z: DOODLE.stickerSizes[0], x: 3, y: 0.5 }), {
+    s: 'a',
+    e: '👑',
+    z: DOODLE.stickerSizes[0],
+    x: 1,
+    y: 0.5,
+  });
+});
+
+test('a doodle that runs out of time expires', () => {
+  const { room } = revealedRound();
+  assert.equal(room.doodleExpired(), false);
+  assert.equal(room.doodleExpired(room.doodle.deadline + DOODLE.graceMs + 1), true);
+});
+
+test('players can rename themselves, but not to a taken name', () => {
+  const { room, players } = roomWith('Alice', 'Bob');
+  room.rename(players[0].id, '  Captain   Noodle ');
+  assert.equal(players[0].name, 'Captain Noodle');
+  assert.throws(() => room.rename(players[0].id, 'bob'), /already has that name/);
+  room.rename(players[1].id, 'BOB'); // changing your own capitalisation is fine
+  assert.equal(players[1].name, 'BOB');
+});
+
+test('silly awards at the end', () => {
+  const { room, alice } = revealedRound();
+  const artistId = room.doodle.artistId;
+  room.pickDoodleTarget(artistId, alice.id);
+  room.finishDoodle(artistId, { photo: DOODLED });
+  room.next();
+  assert.equal(room.phase, 'over');
+  const awards = Object.fromEntries(room.hostView().awards.map((a) => [a.title, a.name]));
+  assert.equal(awards.Picasso, room.players.get(artistId).name);
+  assert.equal(awards['Human Canvas'], 'Alice');
+  assert.equal(awards['Master of Disguise'], undefined, 'nobody was fooled, so no award');
+  assert.ok(awards.Sherlock);
 });

@@ -26,7 +26,10 @@
           </div>
           <div class="field">
             <label for="name">Your name</label>
-            <input id="name" maxlength="20" autocapitalize="words" required />
+            <div class="add-row">
+              <input id="name" maxlength="20" autocapitalize="words" required />
+              <button type="button" class="secondary dice" id="name-dice" aria-label="Random silly name">🎲</button>
+            </div>
           </div>
           <p class="error" id="join-error"></p>
           <button class="block" id="join-button">Join</button>
@@ -38,8 +41,8 @@
         <div class="me-bar">
           <button class="avatar-button" id="retake" aria-label="Retake photo"></button>
           <div class="grow">
-            <div class="name" id="lobby-name"></div>
-            <div class="muted">Room <b id="lobby-code"></b> · tap your face to retake</div>
+            <button class="name-button" id="lobby-name" aria-label="Change your name"></button>
+            <div class="muted">Room <b id="lobby-code"></b> · tap your face or name to change them</div>
           </div>
           <button class="ghost" id="leave">Leave</button>
         </div>
@@ -63,32 +66,67 @@
         <div class="question">Who posted this one?</div>
         <div class="yours" id="yours" hidden>🤫 This one's yours! Pick someone anyway so nobody can tell.</div>
         <div class="pick-grid" id="pick-grid"></div>
-        <p class="muted" style="text-align: center; margin-top: 1em" id="guess-hint">Watch the big screen, then tap a face.</p>
+        <p class="muted center" id="guess-hint">Watch the big screen, then tap a face.</p>
       </section>
 
-      <!-- reveal -->
+      <!-- reveal (and watching someone else doodle) -->
       <section data-screen="reveal" hidden>
         <div class="round-label" id="reveal-round"></div>
         <div class="verdict" id="verdict"></div>
+        <div class="watch" id="watch" hidden>
+          <div class="watch-title" id="watch-title"></div>
+          <canvas class="doodle-canvas" id="watch-canvas" width="480" height="480"></canvas>
+          <div class="muted center" id="watch-timer"></div>
+        </div>
         <h3>Scores</h3>
         <ol class="scores" id="reveal-scores"></ol>
+      </section>
+
+      <!-- my turn to doodle -->
+      <section data-screen="doodle" hidden>
+        <div class="round-label" id="doodle-timer"></div>
+        <div id="doodle-pick">
+          <div class="question">🎰 You won the doodle!</div>
+          <p class="muted center">Pick a face to vandalise.</p>
+          <div class="pick-grid" id="doodle-pick-grid"></div>
+        </div>
+        <div id="doodle-draw" hidden>
+          <div class="question small" id="doodle-title"></div>
+          <canvas class="doodle-canvas drawable" id="doodle-canvas" width="480" height="480"></canvas>
+          <div class="palette" id="palette"></div>
+          <div class="palette stickers" id="stickers"></div>
+          <div class="tools">
+            <div class="sizes" id="sizes"></div>
+            <button type="button" class="secondary" id="undo">↩︎ Undo</button>
+          </div>
+          <label for="new-name">Give them a new name (optional)</label>
+          <div class="add-row">
+            <input id="new-name" maxlength="20" autocomplete="off" />
+            <button type="button" class="secondary dice" id="new-name-dice" aria-label="Random silly name">🎲</button>
+          </div>
+          <button class="block done" id="doodle-done">Done! Show everyone 🎨</button>
+        </div>
       </section>
 
       <!-- game over -->
       <section data-screen="over" hidden>
         <div class="verdict neutral" id="final"></div>
+        <div class="awards" id="my-awards"></div>
         <ol class="scores" id="final-scores"></ol>
-        <p class="muted" style="text-align: center; margin-top: 1.2em">The host can start another round from the big screen.</p>
+        <p class="muted center" style="margin-top: 1.2em">The host can start another round from the big screen.</p>
       </section>
 
       <!-- connecting -->
       <section data-screen="loading">
-        <p class="muted" style="text-align: center">Connecting…</p>
+        <p class="muted center">Connecting…</p>
       </section>
+
+      <div class="reactions" id="reactions" hidden></div>
     </main>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/common.js"></script>
+    <script src="/js/doodle.js"></script>
     <script src="/js/player.js"></script>
   </body>
 </html>

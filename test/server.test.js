@@ -76,8 +76,47 @@ test('a whole game over real sockets', async () => {
   const bobReveal = await stateWhere(bob, (s) => s.phase === 'reveal');
   assert.equal(bobReveal.round.reveal.ownerId, ids.Alice);
 
+  // Bob was the only one right, so Bob gets to doodle on someone's face.
+  assert.equal(bobReveal.doodle.isArtist, true);
+  assert.equal((await send(host, 'host:next')).ok, false, 'next waits for the doodle');
+  assert.equal((await send(cara, 'doodle:pick', { targetId: ids.Alice })).ok, false, 'only the artist can pick');
+  assert.equal((await send(bob, 'doodle:pick', { targetId: ids.Cara })).ok, true);
+  await stateWhere(cara, (s) => s.doodle && s.doodle.isTarget);
+
+  // Strokes stream live to every other screen.
+  const seen = new Promise((resolve) => host.once('doodle:segment', resolve));
+  const caraSees = new Promise((resolve) => cara.once('doodle:segment', resolve));
+  bob.emit('doodle:segment', { s: 'abc', c: '#ff3b3b', w: 0.03, p: [0.2, 0.2, 0.8, 0.8] });
+  const streamed = await seen;
+  assert.deepEqual(streamed.seg.p, [0.2, 0.2, 0.8, 0.8]);
+  assert.equal(streamed.id, bobReveal.doodle.id);
+  await caraSees;
+
+  // A screen that shows up mid-doodle gets caught up on the strokes so far.
+  const lateHost = await client();
+  const replay = new Promise((resolve) => lateHost.once('doodle:replay', resolve));
+  await send(lateHost, 'host:resume', { code, hostToken: created.hostToken });
+  assert.equal((await replay).segments.length, 1);
+
+  const doodled = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xd0, 0x0d, 0x1e]).toString('base64')}`;
+  assert.equal((await send(bob, 'doodle:done', { photo: doodled, name: 'Captain Pickle' })).ok, true);
+  const afterDoodle = await stateWhere(host, (s) => !s.doodle && s.round.reveal.doodle);
+  const renamed = afterDoodle.players.find((p) => p.id === ids.Cara);
+  assert.equal(renamed.name, 'Captain Pickle');
+  const newFace = await fetch(base + renamed.photo);
+  assert.deepEqual(Buffer.from(await newFace.arrayBuffer()), Buffer.from(doodled.split(',')[1], 'base64'));
+
+  // Reactions float up the big screen, and spamming them is capped.
+  let reactions = 0;
+  host.on('reaction', () => (reactions += 1));
+  for (let i = 0; i < 20; i++) alice.emit('react', { e: '😂' });
+  alice.emit('react', { e: '<b>hi</b>' });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(reactions, 6);
+
   await send(host, 'host:next');
-  await stateWhere(host, (s) => s.phase === 'over');
+  const over = await stateWhere(host, (s) => s.phase === 'over');
+  assert.ok(over.awards.some((a) => a.title === 'Picasso' && a.name === 'Bob'));
   await send(host, 'host:playAgain');
   const again = await stateWhere(host, (s) => s.phase === 'lobby');
   assert.equal(again.players.length, 3);

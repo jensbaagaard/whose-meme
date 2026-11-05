@@ -84,6 +84,7 @@
         <!-- game over -->
         <section data-screen="over" class="podium" hidden>
           <div class="winner" id="winner"></div>
+          <div class="award-grid" id="awards"></div>
           <ol class="scores" id="final-scores"></ol>
           <div class="stage-actions">
             <button class="big-button" id="again">Play again</button>
@@ -97,8 +98,22 @@
       </main>
     </div>
 
+    <!-- the doodle, live: a random correct guesser vandalises someone's face -->
+    <div class="doodle-overlay" id="doodle-overlay" hidden>
+      <div class="doodle-card">
+        <div class="doodle-heading" id="doodle-heading"></div>
+        <img class="avatar xl" id="doodle-artist" alt="" hidden />
+        <canvas class="doodle-canvas big" id="host-doodle" width="480" height="480" hidden></canvas>
+        <div class="doodle-sub" id="doodle-sub"></div>
+        <button class="ghost" id="skip-doodle">Skip</button>
+      </div>
+    </div>
+
+    <div class="reaction-layer" id="reaction-layer" aria-hidden="true"></div>
+
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/common.js"></script>
+    <script src="/js/doodle.js"></script>
     <script src="/js/host.js"></script>
   </body>
 </html>

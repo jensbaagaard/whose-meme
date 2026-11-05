@@ -49,11 +49,16 @@
         <input type="file" id="retake-input" accept="image/*" capture="user" hidden />
 
         <h2>Drop your memes</h2>
-        <p class="muted">Paste links to memes (TikTok, Instagram, YouTube, Reddit, anything). Nobody sees who added what.</p>
+        <p class="muted">
+          Paste links to memes (TikTok, Instagram, YouTube, Reddit, anything) or upload images and GIFs. Nobody sees who
+          added what.
+        </p>
         <form id="meme-form" class="add-row" autocomplete="off" novalidate>
           <input id="meme-url" type="url" inputmode="url" placeholder="https://…" enterkeyhint="done" />
           <button>Add</button>
         </form>
+        <button type="button" class="secondary block upload" id="upload-button">📷 Upload images</button>
+        <input type="file" id="upload-input" accept="image/*" multiple hidden />
         <p class="error" id="meme-error"></p>
         <div class="muted" id="meme-count"></div>
         <ul class="meme-list" id="meme-list"></ul>

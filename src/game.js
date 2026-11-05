@@ -2,9 +2,14 @@
 
 const crypto = require('crypto');
 
+const MB = 1024 * 1024;
+
 const LIMITS = {
   nameLength: 20,
   photoBytes: 128 * 1024,
+  imageBytes: 3 * MB, // phones shrink still images to ~300KB, so this is generous
+  gifBytes: 6 * MB, // GIFs are uploaded untouched so they keep animating
+  roomMediaBytes: (Number(process.env.MAX_ROOM_MEDIA_MB) || 150) * MB,
   urlLength: 2048,
   memesPerPlayer: Number(process.env.MAX_MEMES_PER_PLAYER) || 10,
   playersPerRoom: Number(process.env.MAX_PLAYERS_PER_ROOM) || 16,
@@ -79,6 +84,26 @@ function cleanPhoto(raw) {
   return bytes;
 }
 
+// Uploaded meme images are trusted by their first bytes, never by the name or Content-Type they came with.
+// No SVG: it can carry scripts.
+function sniffImageType(bytes) {
+  const starts = (...sig) => sig.every((b, i) => bytes[i] === b);
+  if (starts(0xff, 0xd8, 0xff)) return 'image/jpeg';
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image/png';
+  if (starts(0x47, 0x49, 0x46, 0x38)) return 'image/gif';
+  if (starts(0x52, 0x49, 0x46, 0x46) && bytes.length > 12 && bytes.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function cleanImage(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new GameError('Pick an image first.');
+  const type = sniffImageType(bytes);
+  if (!type) throw new GameError('Only JPEG, PNG, GIF and WebP images work.');
+  const max = type === 'image/gif' ? LIMITS.gifBytes : LIMITS.imageBytes;
+  if (bytes.length > max) throw new GameError(`That image is too big (max ${Math.round(max / MB)}MB).`);
+  return { type, bytes: bytes.length, hash: crypto.createHash('sha1').update(bytes).digest('hex') };
+}
+
 const clamp01 = (n) => Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000;
 const isNumber = (n) => typeof n === 'number' && Number.isFinite(n);
 
@@ -124,7 +149,8 @@ class Room {
     this.code = code;
     this.hostToken = id();
     this.phase = PHASE.LOBBY;
-    // playerId -> { id, token, name, photo, photoVersion, connections, score, stats, memes: [{ id, url }] }
+    // playerId -> { id, token, name, photo, photoVersion, connections, score, stats, memes }
+    // where a meme is { id, kind: 'link', url } or { id, kind: 'image', type, bytes, hash } (the file lives on disk).
     // The id is public (other phones see it); the token is the secret a phone uses to rejoin.
     this.players = new Map();
     this.tokens = new Map(); // token -> playerId
@@ -175,16 +201,18 @@ class Room {
     room.hostToken = data.hostToken;
     room.phase = data.phase;
     room.lastActivity = data.lastActivity;
+    const withKind = (m) => ({ kind: 'link', ...m }); // saves from before image memes only had links
     for (const p of data.players) {
       room.players.set(p.id, {
         ...p,
         photo: Buffer.from(p.photo, 'base64'),
         stats: { ...emptyStats(), ...p.stats },
+        memes: p.memes.map(withKind),
         connections: 0,
       });
       room.tokens.set(p.token, p.id);
     }
-    room.deck = data.deck;
+    room.deck = data.deck.map(withKind);
     room.roundIndex = data.roundIndex;
     if (data.round) {
       room.round = {
@@ -270,15 +298,46 @@ class Room {
 
   // --- memes ---------------------------------------------------------------
 
-  addMeme(playerId, rawUrl) {
+  playerWithRoomForMeme(playerId) {
     const p = this.player(playerId);
     if (this.phase !== PHASE.LOBBY) throw new GameError('The game already started.');
     if (p.memes.length >= LIMITS.memesPerPlayer) throw new GameError(`Max ${LIMITS.memesPerPlayer} memes each.`);
+    return p;
+  }
+
+  addMeme(playerId, rawUrl) {
+    const p = this.playerWithRoomForMeme(playerId);
     const url = cleanUrl(rawUrl);
     if (p.memes.some((m) => m.url === url)) throw new GameError('You already added that one.');
-    const meme = { id: id(), url };
+    const meme = { id: id(), kind: 'link', url };
     p.memes.push(meme);
     return meme;
+  }
+
+  // `image` comes from cleanImage(); the caller stores the bytes on disk under the returned meme's id.
+  addImageMeme(playerId, image) {
+    const p = this.playerWithRoomForMeme(playerId);
+    if (p.memes.some((m) => m.hash === image.hash)) throw new GameError('You already added that one.');
+    if (this.mediaBytes() + image.bytes > LIMITS.roomMediaBytes) {
+      throw new GameError('This room is out of space for images. Try a link instead!');
+    }
+    const meme = { id: id(), kind: 'image', type: image.type, bytes: image.bytes, hash: image.hash };
+    p.memes.push(meme);
+    return meme;
+  }
+
+  // Every image meme the room still needs (in someone's list or in the deck being played).
+  imageMemes() {
+    const byId = new Map();
+    for (const p of this.players.values()) for (const m of p.memes) if (m.kind === 'image') byId.set(m.id, m);
+    for (const m of this.deck) if (m.kind === 'image') byId.set(m.id, m);
+    return byId;
+  }
+
+  mediaBytes() {
+    let total = 0;
+    for (const m of this.imageMemes().values()) total += m.bytes;
+    return total;
   }
 
   removeMeme(playerId, memeId) {
@@ -488,6 +547,16 @@ class Room {
     return `/avatar/${this.code}/${p.id}.jpg?v=${p.photoVersion}`;
   }
 
+  mediaUrl(meme) {
+    return `/media/${this.code}/${meme.id}`;
+  }
+
+  memeView(meme) {
+    return meme.kind === 'image'
+      ? { id: meme.id, kind: 'image', image: this.mediaUrl(meme), bytes: meme.bytes }
+      : { id: meme.id, kind: 'link', url: meme.url };
+  }
+
   scoreboard() {
     return [...this.players.values()]
       .map((p) => ({ id: p.id, name: p.name, photo: this.photoUrl(p), score: p.score }))
@@ -574,7 +643,8 @@ class Room {
       doodle: this.doodleInfo(null),
     };
     if (this.phase === PHASE.GUESSING || this.phase === PHASE.REVEAL) {
-      view.round = { ...this.roundInfo(), url: this.round.meme.url };
+      const { id: _id, ...meme } = this.memeView(this.round.meme);
+      view.round = { ...this.roundInfo(), ...meme };
       if (this.phase === PHASE.REVEAL) view.round.reveal = this.revealInfo();
     }
     if (this.phase === PHASE.OVER) view.awards = this.awards();
@@ -588,7 +658,13 @@ class Room {
       role: 'player',
       code: this.code,
       phase: this.phase,
-      me: { id: me.id, name: me.name, photo: this.photoUrl(me), score: me.score, memes: me.memes },
+      me: {
+        id: me.id,
+        name: me.name,
+        photo: this.photoUrl(me),
+        score: me.score,
+        memes: me.memes.map((m) => this.memeView(m)),
+      },
       players: [...this.players.values()].map((p) => ({
         id: p.id,
         name: p.name,
@@ -624,5 +700,7 @@ module.exports = {
   cleanUrl,
   cleanName,
   cleanPhoto,
+  cleanImage,
   cleanSegment,
+  sniffImageType,
 };

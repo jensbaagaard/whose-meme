@@ -159,3 +159,61 @@ test('a kicked phone is told it is gone', async () => {
   await stateWhere(phone, (s) => s.phase === 'gone');
   assert.equal((await send(phone, 'player:addMeme', { url: 'https://example.com' })).ok, false);
 });
+
+test('image memes: upload, show on the big screen, clean up from disk', async () => {
+  const host = await client();
+  const { code } = await send(host, 'host:create');
+  const phone = await client();
+  const token = 'img-token-0123456789';
+  await send(phone, 'player:join', { code, token, name: 'Imogen', photo: PHOTO });
+  const other = await client();
+  await send(other, 'player:join', { code, token: 'other-token-0123456789', name: 'Otto', photo: PHOTO });
+
+  const upload = (body, headers = {}) =>
+    fetch(`${base}/api/rooms/${code}/memes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/png', 'X-Player-Token': token, ...headers },
+      body,
+    });
+  const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.from('a very animated meme')]);
+
+  assert.equal((await (await upload(gif, { 'X-Player-Token': 'not-a-player-0123456789' })).json()).ok, false);
+  const svg = await upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'));
+  assert.equal(svg.status, 400);
+  assert.match((await svg.json()).error, /Only JPEG/);
+  const huge = await upload(Buffer.concat([gif, Buffer.alloc(7 * 1024 * 1024)]));
+  assert.equal(huge.status, 413);
+  assert.equal((await huge.json()).ok, false);
+
+  // The label says PNG but the bytes say GIF: the bytes win.
+  const res = await upload(gif);
+  const body = await res.json();
+  assert.equal(body.ok, true, body.error);
+  const mine = await stateWhere(phone, (s) => s.me.memes.length === 1);
+  const meme = mine.me.memes[0];
+  assert.equal(meme.kind, 'image');
+  const served = await fetch(base + meme.image);
+  assert.equal(served.headers.get('content-type'), 'image/gif');
+  assert.equal(served.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(Buffer.from(await served.arrayBuffer()), gif);
+
+  // A second image, removed again: its file goes away once the room is saved.
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9]);
+  assert.equal((await (await upload(jpeg)).json()).ok, true);
+  const two = await stateWhere(phone, (s) => s.me.memes.length === 2);
+  const removed = two.me.memes[1];
+  const file = path.join(process.env.DATA_DIR, 'media', code, removed.id);
+  assert.ok(fs.existsSync(file));
+  await send(phone, 'player:removeMeme', { memeId: removed.id });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(fs.existsSync(file), false);
+  assert.equal((await fetch(base + removed.image)).status, 404);
+
+  // The game: the only meme is the GIF, so it is what the big screen shows.
+  await send(host, 'host:start');
+  const round = await stateWhere(host, (s) => s.phase === 'guessing');
+  assert.equal(round.round.kind, 'image');
+  assert.equal(round.round.image, meme.image);
+  const nope = await upload(jpeg);
+  assert.match((await nope.json()).error, /already started/);
+});

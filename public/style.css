@@ -313,6 +313,19 @@ label {
   white-space: nowrap;
 }
 
+.meme-list .thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex: none;
+  background: var(--panel-2);
+}
+
+button.upload {
+  margin-top: 10px;
+}
+
 .meme-list .domain {
   font-weight: 800;
   display: block;
@@ -685,6 +698,22 @@ label {
   font-size: 1em;
 }
 
+.meme-image {
+  display: block;
+  line-height: 0;
+}
+
+.meme-image img {
+  /* Scale up to the stage height (small GIFs too), never wider than the screen, never stretched. */
+  height: 42vh;
+  width: auto;
+  max-width: 85vw;
+  object-fit: contain;
+  border-radius: 20px;
+  box-shadow: 0 0 0 4px var(--yellow);
+  background: var(--panel);
+}
+
 .prompt {
   font-size: 2.6em;
   font-weight: 900;
@@ -709,8 +738,8 @@ label {
 }
 
 .locked .avatar {
-  width: 9em;
-  height: 9em;
+  width: min(9em, 15vh);
+  height: min(9em, 15vh);
 }
 
 .locked.in {

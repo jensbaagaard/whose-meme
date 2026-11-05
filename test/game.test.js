@@ -2,7 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Room, GameError, DOODLE, cleanUrl, cleanPhoto, cleanSegment } = require('../src/game');
+const { Room, GameError, DOODLE, LIMITS, cleanUrl, cleanPhoto, cleanImage, cleanSegment } = require('../src/game');
+
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('fake png body')]);
+const GIF = Buffer.concat([Buffer.from('GIF89a'), Buffer.from('fake gif body')]);
 
 const PHOTO = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString('base64')}`;
 const DOODLED = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0xd0, 0x0d]).toString('base64')}`;
@@ -301,6 +304,92 @@ test('players can rename themselves, but not to a taken name', () => {
   assert.throws(() => room.rename(players[0].id, 'bob'), /already has that name/);
   room.rename(players[1].id, 'BOB'); // changing your own capitalisation is fine
   assert.equal(players[1].name, 'BOB');
+});
+
+test('cleanImage trusts the bytes, not the label, and caps the size', () => {
+  assert.equal(cleanImage(PNG).type, 'image/png');
+  assert.equal(cleanImage(GIF).type, 'image/gif');
+  assert.equal(cleanImage(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2])).type, 'image/jpeg');
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')]);
+  assert.equal(cleanImage(webp).type, 'image/webp');
+  assert.throws(() => cleanImage(Buffer.from('<svg onload="alert(1)"></svg>')), /Only JPEG/);
+  assert.throws(() => cleanImage(Buffer.from('<html><script>')), /Only JPEG/);
+  assert.throws(() => cleanImage(Buffer.alloc(0)), /Pick an image/);
+  assert.throws(() => cleanImage({}), /Pick an image/);
+  const bigJpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(LIMITS.imageBytes)]);
+  assert.throws(() => cleanImage(bigJpeg), /too big/);
+  const bigGif = Buffer.concat([GIF, Buffer.alloc(LIMITS.imageBytes)]); // fine for a GIF
+  assert.equal(cleanImage(bigGif).type, 'image/gif');
+  assert.notEqual(cleanImage(PNG).hash, cleanImage(GIF).hash);
+});
+
+test('image memes share the meme limit, reject duplicates and respect the room budget', () => {
+  const { room, players } = roomWith('Alice', 'Bob');
+  const [alice, bob] = players;
+  const meme = room.addImageMeme(alice.id, cleanImage(PNG));
+  assert.equal(meme.kind, 'image');
+  assert.throws(() => room.addImageMeme(alice.id, cleanImage(PNG)), /already added/);
+  room.addImageMeme(bob.id, cleanImage(PNG)); // someone else may post the same image
+
+  assert.deepEqual(room.playerView(alice.id).me.memes, [
+    { id: meme.id, kind: 'image', image: `/media/TEST/${meme.id}`, bytes: PNG.length },
+  ]);
+  assert.ok(!JSON.stringify(room.hostView()).includes(meme.id), 'the big screen does not see it before its round');
+
+  for (let i = 1; i < LIMITS.memesPerPlayer; i++) room.addMeme(alice.id, `https://example.com/${i}`);
+  assert.throws(() => room.addImageMeme(alice.id, cleanImage(GIF)), /Max/);
+
+  const saved = LIMITS.roomMediaBytes;
+  LIMITS.roomMediaBytes = room.mediaBytes() + 5;
+  try {
+    assert.throws(() => room.addImageMeme(bob.id, cleanImage(GIF)), /out of space/);
+  } finally {
+    LIMITS.roomMediaBytes = saved;
+  }
+});
+
+test('an image meme shows on the big screen when it comes up, never on the phones', () => {
+  const { room, players } = roomWith('Alice', 'Bob');
+  const [alice, bob] = players;
+  const meme = room.addImageMeme(alice.id, cleanImage(GIF));
+  room.start();
+  const round = room.hostView().round;
+  assert.equal(round.kind, 'image');
+  assert.equal(round.image, `/media/TEST/${meme.id}`);
+  assert.equal(round.url, undefined);
+  assert.ok(!JSON.stringify(room.playerView(bob.id)).includes(meme.id), 'phones watch the big screen');
+});
+
+test('the room keeps the images it still needs, and lets go of the rest', () => {
+  const { room, players } = roomWith('Alice', 'Bob');
+  const [alice, bob] = players;
+  const a = room.addImageMeme(alice.id, cleanImage(PNG));
+  const b = room.addImageMeme(bob.id, cleanImage(GIF));
+  room.removeMeme(bob.id, b.id);
+  assert.deepEqual([...room.imageMemes().keys()], [a.id]);
+  assert.equal(room.mediaBytes(), PNG.length);
+  room.start();
+  room.end();
+  assert.deepEqual([...room.imageMemes().keys()], [a.id], 'kept until play again');
+  room.playAgain();
+  assert.equal(room.imageMemes().size, 0);
+});
+
+test('image memes survive a snapshot, and old link-only saves still load', () => {
+  const { room, players } = roomWith('Alice', 'Bob');
+  const meme = room.addImageMeme(players[0].id, cleanImage(PNG));
+  room.addMeme(players[1].id, 'https://example.com/b');
+  room.start();
+  const copy = Room.restore(JSON.parse(JSON.stringify(room.snapshot())));
+  assert.equal(copy.imageMemes().get(meme.id).type, 'image/png');
+
+  // Saves from before images existed: link memes without a kind.
+  const old = JSON.parse(JSON.stringify(room.snapshot()));
+  old.players[1].memes = [{ id: 'abc', url: 'https://example.com/old' }];
+  for (const m of old.deck) if (m.kind === 'link') delete m.kind;
+  const restored = Room.restore(old);
+  assert.equal(restored.players.get(players[1].id).memes[0].kind, 'link');
+  assert.ok(restored.deck.every((m) => m.kind === 'link' || m.kind === 'image'));
 });
 
 test('silly awards at the end', () => {

@@ -164,6 +164,74 @@ $('#meme-form').addEventListener('submit', async (event) => {
   else $('#meme-error').textContent = res.error;
 });
 
+const MEME_MAX_SIDE = 1600;
+const GIF_MAX_BYTES = 6 * 1024 * 1024;
+
+// Still images are shrunk and re-encoded here (a 12MP photo becomes a few hundred KB);
+// GIFs go up untouched so they keep moving.
+async function prepareMeme(file) {
+  if (file.type === 'image/gif') {
+    if (file.size > GIF_MAX_BYTES) throw new Error('That GIF is too big (max 6MB).');
+    return file;
+  }
+  const img = await loadImage(file);
+  const scale = Math.min(1, MEME_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; // transparent PNGs get white behind them instead of black
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(img.src);
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Couldn't read that image."))), 'image/jpeg', 0.85),
+  );
+}
+
+async function uploadMeme(file) {
+  const body = await prepareMeme(file);
+  let res;
+  try {
+    res = await fetch(`/api/rooms/${encodeURIComponent(session.code)}/memes`, {
+      method: 'POST',
+      headers: { 'Content-Type': body.type || 'application/octet-stream', 'X-Player-Token': session.token },
+      body,
+    });
+  } catch {
+    throw new Error('Upload failed, check your connection.');
+  }
+  if (res.status === 413) throw new Error('That image is too big.');
+  const data = await res.json().catch(() => ({ ok: false, error: 'Upload failed, try again.' }));
+  if (!data.ok) throw new Error(data.error);
+}
+
+$('#upload-button').addEventListener('click', () => {
+  const input = $('#upload-input');
+  input.value = '';
+  input.click();
+});
+
+$('#upload-input').addEventListener('change', async (event) => {
+  const files = [...event.target.files];
+  const button = $('#upload-button');
+  $('#meme-error').textContent = '';
+  button.disabled = true;
+  for (const [i, file] of files.entries()) {
+    button.textContent = files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : 'Uploading…';
+    try {
+      await uploadMeme(file);
+    } catch (err) {
+      $('#meme-error').textContent = err.message;
+      break;
+    }
+  }
+  button.disabled = false;
+  button.textContent = '📷 Upload images';
+});
+
+const formatBytes = (n) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
 $('#retake').addEventListener('click', async () => {
   const shot = await pickPhoto($('#retake-input'));
   if (!shot) return;
@@ -191,14 +259,28 @@ $('#leave').addEventListener('click', async () => {
 function renderLobby(s) {
   $('#lobby-name').textContent = `${s.me.name} ✏️`;
   $('#lobby-code').textContent = s.code;
-  $('#retake').replaceChildren(avatar(s.me, 'lg'));
+  const retake = $('#retake');
+  if (retake.dataset.photo !== s.me.photo) {
+    retake.dataset.photo = s.me.photo;
+    retake.replaceChildren(avatar(s.me, 'lg'));
+  }
   $('#meme-count').textContent = `${s.me.memes.length} / ${s.memeLimit} added`;
-  $('#meme-list').replaceChildren(
+  // Only rebuilt when my memes change, so other players' activity can't eat a tap on ✕ (see renderFaces).
+  const list = $('#meme-list');
+  const key = s.me.memes.map((m) => m.id).join(',');
+  if (list.dataset.key === key) return renderLobbyStatus(s);
+  list.dataset.key = key;
+  list.replaceChildren(
     ...s.me.memes.map((meme) =>
       h(
         'li',
         {},
-        h('span', { class: 'url' }, h('span', { class: 'domain' }, hostnameOf(meme.url)), h('span', { class: 'full' }, meme.url)),
+        meme.kind === 'image'
+          ? [
+              h('img', { class: 'thumb', src: meme.image, alt: '' }),
+              h('span', { class: 'url' }, h('span', { class: 'domain' }, 'Image'), h('span', { class: 'full' }, formatBytes(meme.bytes))),
+            ]
+          : h('span', { class: 'url' }, h('span', { class: 'domain' }, hostnameOf(meme.url)), h('span', { class: 'full' }, meme.url)),
         h('button', {
           class: 'ghost',
           'aria-label': 'Remove',
@@ -207,6 +289,10 @@ function renderLobby(s) {
       ),
     ),
   );
+  renderLobbyStatus(s);
+}
+
+function renderLobbyStatus(s) {
   const others = s.players.length - 1;
   $('#lobby-status').textContent =
     `${plural(others, 'other player')} · ${plural(s.memeCount, 'meme')} in the pool. ` +

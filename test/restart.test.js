@@ -57,6 +57,13 @@ test('a running game survives a restart and a crash', async (t) => {
   }
   await send(phones.Alice, 'player:addMeme', { url: 'https://example.com/alice' });
   await send(phones.Bob, 'player:addMeme', { url: 'https://example.com/bob' });
+  const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.from("cara's meme")]);
+  const uploaded = await fetch(`${srv.base}/api/rooms/${code}/memes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/gif', 'X-Player-Token': token('Cara') },
+    body: gif,
+  });
+  assert.equal((await uploaded.json()).ok, true);
   await send(host, 'host:start');
 
   const before = await stateWhere(host, (s) => s.phase === 'guessing');
@@ -90,6 +97,9 @@ test('a running game survives a restart and a crash', async (t) => {
     assert.equal(res.ok, true, res.error);
     assert.equal(res.playerId, ids[name]);
   }
+  const caraState = await stateWhere(phones2.Cara, (s) => s.me.memes.length === 1);
+  const image = await fetch(srv.base + caraState.me.memes[0].image);
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), gif, 'uploaded images survive');
   await send(phones2[third], 'player:guess', { targetId: ids[guesser] }); // wrong
   await send(phones2[owner], 'player:guess', { targetId: ids[guesser] }); // bluff
   const revealed = await stateWhere(host2, (s) => s.phase === 'reveal');

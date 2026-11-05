@@ -6,14 +6,15 @@ const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
-const { Room, GameError, REACTIONS } = require('./src/game');
+const { Room, GameError, LIMITS, REACTIONS, cleanImage } = require('./src/game');
 const { RoomStore } = require('./src/store');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOM_TTL_MS = (Number(process.env.ROOM_TTL_HOURS) || 3) * 60 * 60 * 1000;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 500;
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const MAX_MEDIA_BYTES = (Number(process.env.MAX_MEDIA_MB) || 2048) * 1024 * 1024; // all rooms together
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O, they read like 1 and 0
 const store = new RoomStore(DATA_DIR);
@@ -59,6 +60,52 @@ app.get('/avatar/:code/:playerId.jpg', (req, res) => {
   // URLs carry ?v=<photoVersion>, so a retake gets a new URL and old ones can cache forever.
   res.type('image/jpeg').set('Cache-Control', 'private, max-age=86400').set('X-Content-Type-Options', 'nosniff');
   res.send(player.photo);
+});
+
+// Meme images: a phone uploads one as the raw request body (with its secret player token),
+// the big screen shows it from /media/... when it comes up.
+app.post('/api/rooms/:code/memes', express.raw({ type: () => true, limit: LIMITS.gifBytes }), (req, res) => {
+  try {
+    const room = getRoom(req.params.code);
+    const playerId = room.tokens.get(String(req.get('x-player-token') || ''));
+    if (!playerId) throw new GameError("You're not in this room.");
+    const image = cleanImage(req.body);
+    let used = 0;
+    for (const r of rooms.values()) used += r.mediaBytes();
+    if (used + image.bytes > MAX_MEDIA_BYTES) {
+      throw new GameError('The server is out of space for images right now. Try a link instead!');
+    }
+    const meme = room.addImageMeme(playerId, image);
+    try {
+      store.saveMedia(room.code, meme.id, req.body);
+    } catch (err) {
+      room.removeMeme(playerId, meme.id);
+      throw err;
+    }
+    room.touch();
+    store.save(room);
+    broadcast(room);
+    res.json({ ok: true, memeId: meme.id });
+  } catch (err) {
+    if (!(err instanceof GameError)) console.error(err);
+    res.status(400).json({ ok: false, error: err instanceof GameError ? err.message : 'Something went wrong.' });
+  }
+});
+
+// Uploads over the size limit are turned away by the body parser before the handler runs.
+app.use('/api', (err, req, res, next) => {
+  if (err.type !== 'entity.too.large') return next(err);
+  res.status(413).json({ ok: false, error: `That image is too big (max ${LIMITS.gifBytes / (1024 * 1024)}MB).` });
+});
+
+app.get('/media/:code/:memeId', (req, res) => {
+  const room = rooms.get(normalizeCode(req.params.code));
+  const meme = room && room.imageMemes().get(req.params.memeId);
+  if (!meme) return res.status(404).end();
+  res.type(meme.type).set('Cache-Control', 'private, max-age=86400').set('X-Content-Type-Options', 'nosniff');
+  res.sendFile(store.mediaPath(room.code, meme.id), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
 });
 
 app.get('/host', (req, res) => res.sendFile(path.join(__dirname, 'public', 'host.html')));

@@ -94,9 +94,17 @@ function renderGuessing(s) {
   const active = s.players.filter((p) => p.connected || p.hasGuessed);
   const locked = active.filter((p) => p.hasGuessed).length;
   $('#guess-round').textContent = `Meme ${round.number} of ${round.total} · ${locked}/${active.length} locked in`;
-  setLink($('#meme-link'), round.url);
-  $('#meme-host').textContent = hostnameOf(round.url);
-  $('#meme-url').textContent = round.url;
+  const isImage = round.kind === 'image';
+  $('#meme-link').hidden = isImage;
+  $('#meme-image-link').hidden = !isImage;
+  if (isImage) {
+    setLink($('#meme-image-link'), round.image);
+    if ($('#meme-image').getAttribute('src') !== round.image) $('#meme-image').src = round.image;
+  } else {
+    setLink($('#meme-link'), round.url);
+    $('#meme-host').textContent = hostnameOf(round.url);
+    $('#meme-url').textContent = round.url;
+  }
   $('#locked-row').replaceChildren(
     ...active.map((p) => h('div', { class: `locked ${p.hasGuessed ? 'in' : ''}` }, avatar(p), h('span', {}, p.name))),
   );
@@ -129,8 +137,8 @@ function renderReveal(s) {
     : reveal.results.length
       ? 'Nobody was fooled!'
       : 'Nobody guessed…';
-  setLink($('#reveal-link'), round.url);
-  $('#reveal-host').textContent = hostnameOf(round.url);
+  setLink($('#reveal-link'), round.kind === 'image' ? round.image : round.url);
+  $('#reveal-host').textContent = round.kind === 'image' ? 'the image' : hostnameOf(round.url);
   $('#guess-list').replaceChildren(
     ...reveal.results.map((r) => {
       const guesser = byId.get(r.playerId);

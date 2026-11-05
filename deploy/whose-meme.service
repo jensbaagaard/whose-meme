@@ -14,10 +14,15 @@ Environment=NODE_ENV=production
 Environment=PORT=3000
 # Only nginx should reach the app.
 Environment=HOST=127.0.0.1
+# Running games are saved here so restarts and deploys don't end them.
+# systemd creates the directory, owned by the service user.
+Environment=DATA_DIR=/var/lib/whose-meme
+StateDirectory=whose-meme
+StateDirectoryMode=0700
 Restart=always
 RestartSec=2
 
-# Hardening: the app needs no disk writes and no extra privileges.
+# Hardening: the app only writes to its StateDirectory and needs no extra privileges.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

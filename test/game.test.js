@@ -151,3 +151,33 @@ test('kicking frees the name and invalidates the token', () => {
   assert.equal(room.tokens.has('token-Bob-0123456789'), false);
   assert.ok(room.join('token-new-0123456789', 'Bob', PHOTO));
 });
+
+test('a room survives a snapshot round trip mid-round', () => {
+  const { room, players } = roomWith('Alice', 'Bob', 'Cara');
+  const [alice, bob, cara] = players;
+  room.addMeme(alice.id, 'https://example.com/alice');
+  room.addMeme(bob.id, 'https://example.com/bob');
+  room.start();
+  const ownerId = room.round.ownerId;
+  const guesser = [alice, bob, cara].find((p) => p.id !== ownerId);
+  room.guess(guesser.id, ownerId);
+
+  const copy = Room.restore(JSON.parse(JSON.stringify(room.snapshot())));
+  assert.equal(copy.phase, 'guessing');
+  assert.equal(copy.hostToken, room.hostToken);
+  assert.equal(copy.round.meme.url, room.round.meme.url);
+  assert.equal(copy.round.guesses.get(guesser.id), ownerId);
+  assert.deepEqual(copy.players.get(alice.id).photo, alice.photo);
+  assert.equal(copy.join('token-Bob-0123456789').id, bob.id, 'tokens still rejoin');
+  assert.equal(copy.players.get(bob.id).connections, 0, 'nobody is connected after a restart');
+
+  // The restored room plays on as normal.
+  for (const p of copy.players.values()) copy.setConnected(p.id, true);
+  for (const p of copy.players.values()) {
+    if (p.id === guesser.id) continue;
+    copy.guess(p.id, [...copy.players.keys()].find((id) => id !== p.id));
+  }
+  assert.equal(copy.everyoneGuessed(), true);
+  copy.reveal();
+  assert.equal(copy.players.get(guesser.id).score, 1);
+});

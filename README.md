@@ -26,12 +26,13 @@ To try it with real phones on your Wi-Fi, open `http://<your-laptop-ip>:3000/hos
 | ---------------------- | --------- | ------------------------------------------------ |
 | `PORT`                 | `3000`    | HTTP port                                        |
 | `HOST`                 | `0.0.0.0` | Bind address (`127.0.0.1` behind nginx)          |
+| `DATA_DIR`             | `./data`  | Where running games are saved                    |
 | `ROOM_TTL_HOURS`       | `3`       | Rooms with no activity for this long are deleted |
 | `MAX_ROOMS`            | `500`     | Cap on simultaneous rooms                        |
 | `MAX_PLAYERS_PER_ROOM` | `16`      |                                                  |
 | `MAX_MEMES_PER_PLAYER` | `10`      |                                                  |
 
-Everything is kept in memory, with no database. Restarting the server ends any running games.
+Rooms are saved to disk as one JSON file per room in `DATA_DIR`, with changes batched about every 200ms. On startup the server loads them back. Phones and the main screen reconnect on their own and land back in the same round, with scores and guesses intact. A normal restart (SIGTERM, as `systemctl restart` sends) writes out pending changes first; a hard crash loses at most the last ~200ms. Room files include the selfies and are deleted when the room expires.
 
 ## Deploy on a droplet (Ubuntu)
 
@@ -57,7 +58,7 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d memes.example.com
 ```
 
-Updating by hand: `cd /opt/whose-meme && sudo git pull && sudo npm ci --omit=dev && sudo systemctl restart whose-meme`.
+Updating by hand (running games survive this): `cd /opt/whose-meme && sudo git pull && sudo npm ci --omit=dev && sudo systemctl restart whose-meme`.
 
 CI (`.github/workflows/ci.yml`) runs the tests on every push and pull request.
 
@@ -65,4 +66,5 @@ CI (`.github/workflows/ci.yml`) runs the tests on every push and pull request.
 
 - `server.js`: Express + Socket.IO, room codes, QR and avatar endpoints
 - `src/game.js`: the game rules and what each screen is allowed to see (pure, no sockets)
+- `src/store.js`: saves rooms to `DATA_DIR` and loads them on startup
 - `public/`: plain HTML/CSS/JS, no build step (`index.html` is the phone, `host.html` the big screen)

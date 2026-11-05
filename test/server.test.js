@@ -1,14 +1,17 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { io: connect } = require('socket.io-client');
+const { PHOTO, connectClient, closeAll, send, stateWhere } = require('./helpers');
+
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'whose-meme-test-'));
 const { server, rooms } = require('../server');
 
-const PHOTO = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 1, 2, 3]).toString('base64')}`;
-
 let base;
-const sockets = [];
+const client = () => connectClient(base);
 
 test.before(async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -16,33 +19,10 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  for (const s of sockets) s.disconnect();
+  closeAll();
   await new Promise((resolve) => server.close(resolve));
+  fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 });
-
-// A client that remembers the latest state the server pushed to it.
-async function client() {
-  const socket = connect(base, { transports: ['websocket'], forceNew: true });
-  sockets.push(socket);
-  socket.latest = null;
-  socket.waiters = [];
-  socket.on('state', (s) => {
-    socket.latest = s;
-    socket.waiters = socket.waiters.filter((w) => !(w.pred(s) && (w.resolve(s), true)));
-  });
-  await new Promise((resolve) => socket.on('connect', resolve));
-  return socket;
-}
-
-const send = (socket, event, payload = {}) => socket.timeout(2000).emitWithAck(event, payload);
-
-function stateWhere(socket, pred) {
-  if (socket.latest && pred(socket.latest)) return Promise.resolve(socket.latest);
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out; last state: ${JSON.stringify(socket.latest)}`)), 2000);
-    socket.waiters.push({ pred, resolve: (s) => (clearTimeout(timer), resolve(s)) });
-  });
-}
 
 test('a whole game over real sockets', async () => {
   const host = await client();

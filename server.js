@@ -7,14 +7,17 @@ const express = require('express');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
 const { Room, GameError } = require('./src/game');
+const { RoomStore } = require('./src/store');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOM_TTL_MS = (Number(process.env.ROOM_TTL_HOURS) || 3) * 60 * 60 * 1000;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 500;
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O, they read like 1 and 0
-const rooms = new Map();
+const store = new RoomStore(DATA_DIR);
+const rooms = new Map(store.loadAll().map((room) => [room.code, room]));
 
 function newRoomCode() {
   for (let attempt = 0; attempt < 1000; attempt++) {
@@ -76,11 +79,13 @@ function broadcast(room) {
   }
 }
 
-// Wraps a socket handler: catches game errors, answers the ack, and pushes fresh state.
+// Wraps a socket handler: catches game errors, answers the ack, then saves and pushes fresh state
+// for the room the socket was in before and after (joining, leaving and creating move sockets).
 function handler(socket, fn) {
   return async (payload, ack) => {
     if (typeof payload === 'function') [payload, ack] = [{}, payload];
     const reply = typeof ack === 'function' ? ack : () => {};
+    const before = socket.data.code;
     try {
       const result = await fn(payload || {});
       reply({ ok: true, ...result });
@@ -88,9 +93,11 @@ function handler(socket, fn) {
       if (!(err instanceof GameError)) console.error(err);
       reply({ ok: false, error: err instanceof GameError ? err.message : 'Something went wrong.' });
     }
-    const room = socket.data.code && rooms.get(socket.data.code);
-    if (room) {
+    for (const code of new Set([before, socket.data.code])) {
+      const room = code && rooms.get(code);
+      if (!room) continue;
       room.touch();
+      store.save(room);
       broadcast(room);
     }
   };
@@ -197,19 +204,32 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => detach(socket));
 });
 
-// Forget rooms nobody has touched in a while.
-setInterval(() => {
+// Forget rooms nobody has touched in a while (including ones that went stale while we were down).
+function expireRooms() {
   const cutoff = Date.now() - ROOM_TTL_MS;
   for (const [code, room] of rooms) {
     if (room.lastActivity < cutoff) {
       io.to(hostChannel(code)).emit('expired');
       rooms.delete(code);
+      store.remove(code);
     }
   }
-}, 60 * 1000).unref();
+}
+expireRooms();
+setInterval(expireRooms, 60 * 1000).unref();
 
 if (require.main === module) {
-  server.listen(PORT, HOST, () => console.log(`Whose Meme? listening on http://${HOST}:${PORT}`));
+  // systemctl restart / deploys send SIGTERM: write out anything still pending before exiting.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+      store.flushAll();
+      process.exit(0);
+    });
+  }
+  server.listen(PORT, HOST, () => {
+    const { address, port } = server.address();
+    console.log(`Whose Meme? listening on http://${address}:${port} (${rooms.size} saved rooms loaded from ${DATA_DIR})`);
+  });
 }
 
-module.exports = { server, rooms };
+module.exports = { server, rooms, store };

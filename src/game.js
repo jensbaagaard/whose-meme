@@ -89,6 +89,58 @@ class Room {
     this.lastActivity = Date.now();
   }
 
+  // --- persistence -----------------------------------------------------------
+
+  // Plain JSON for the disk. Connection counts are left out: after a restart nobody is connected yet.
+  snapshot() {
+    return {
+      version: 1,
+      code: this.code,
+      hostToken: this.hostToken,
+      phase: this.phase,
+      lastActivity: this.lastActivity,
+      players: [...this.players.values()].map((p) => ({
+        id: p.id,
+        token: p.token,
+        name: p.name,
+        photo: p.photo.toString('base64'),
+        photoVersion: p.photoVersion,
+        score: p.score,
+        memes: p.memes,
+      })),
+      deck: this.deck,
+      roundIndex: this.roundIndex,
+      round: this.round && {
+        ownerId: this.round.ownerId,
+        guesses: [...this.round.guesses],
+        results: this.round.results,
+      },
+    };
+  }
+
+  static restore(data) {
+    if (data.version !== 1) throw new Error(`Unknown room snapshot version ${data.version}`);
+    const room = new Room(data.code);
+    room.hostToken = data.hostToken;
+    room.phase = data.phase;
+    room.lastActivity = data.lastActivity;
+    for (const p of data.players) {
+      room.players.set(p.id, { ...p, photo: Buffer.from(p.photo, 'base64'), connections: 0 });
+      room.tokens.set(p.token, p.id);
+    }
+    room.deck = data.deck;
+    room.roundIndex = data.roundIndex;
+    if (data.round) {
+      room.round = {
+        meme: room.deck[room.roundIndex],
+        ownerId: data.round.ownerId,
+        guesses: new Map(data.round.guesses),
+        results: data.round.results,
+      };
+    }
+    return room;
+  }
+
   // --- players -------------------------------------------------------------
 
   join(token, rawName, rawPhoto) {

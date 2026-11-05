@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#15121f" />
+    <title>Whose Meme?</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="phone">
+      <h1 class="logo">Whose <span>Meme?</span></h1>
+
+      <!-- join -->
+      <section data-screen="join" hidden>
+        <form id="join-form" autocomplete="off">
+          <div class="photo-picker">
+            <button type="button" class="shot" id="shot-button" aria-label="Take your photo">📸</button>
+            <span class="muted" id="shot-hint">Tap to take a selfie, people will guess by tapping your face</span>
+            <input type="file" id="shot-input" accept="image/*" capture="user" hidden />
+          </div>
+          <div class="field">
+            <label for="code">Room code</label>
+            <input id="code" class="code-input" maxlength="4" inputmode="text" autocapitalize="characters" required />
+          </div>
+          <div class="field">
+            <label for="name">Your name</label>
+            <input id="name" maxlength="20" autocapitalize="words" required />
+          </div>
+          <p class="error" id="join-error"></p>
+          <button class="block" id="join-button">Join</button>
+        </form>
+      </section>
+
+      <!-- lobby: add memes -->
+      <section data-screen="lobby" hidden>
+        <div class="me-bar">
+          <button class="avatar-button" id="retake" aria-label="Retake photo"></button>
+          <div class="grow">
+            <div class="name" id="lobby-name"></div>
+            <div class="muted">Room <b id="lobby-code"></b> · tap your face to retake</div>
+          </div>
+          <button class="ghost" id="leave">Leave</button>
+        </div>
+        <input type="file" id="retake-input" accept="image/*" capture="user" hidden />
+
+        <h2>Drop your memes</h2>
+        <p class="muted">Paste links to memes (TikTok, Instagram, YouTube, Reddit, anything). Nobody sees who added what.</p>
+        <form id="meme-form" class="add-row" autocomplete="off" novalidate>
+          <input id="meme-url" type="url" inputmode="url" placeholder="https://…" enterkeyhint="done" />
+          <button>Add</button>
+        </form>
+        <p class="error" id="meme-error"></p>
+        <div class="muted" id="meme-count"></div>
+        <ul class="meme-list" id="meme-list"></ul>
+        <div class="status" id="lobby-status"></div>
+      </section>
+
+      <!-- guessing -->
+      <section data-screen="guessing" hidden>
+        <div class="round-label" id="guess-round"></div>
+        <div class="question">Who posted this one?</div>
+        <div class="yours" id="yours" hidden>🤫 This one's yours! Pick someone anyway so nobody can tell.</div>
+        <div class="pick-grid" id="pick-grid"></div>
+        <p class="muted" style="text-align: center; margin-top: 1em" id="guess-hint">Watch the big screen, then tap a face.</p>
+      </section>
+
+      <!-- reveal -->
+      <section data-screen="reveal" hidden>
+        <div class="round-label" id="reveal-round"></div>
+        <div class="verdict" id="verdict"></div>
+        <h3>Scores</h3>
+        <ol class="scores" id="reveal-scores"></ol>
+      </section>
+
+      <!-- game over -->
+      <section data-screen="over" hidden>
+        <div class="verdict neutral" id="final"></div>
+        <ol class="scores" id="final-scores"></ol>
+        <p class="muted" style="text-align: center; margin-top: 1.2em">The host can start another round from the big screen.</p>
+      </section>
+
+      <!-- connecting -->
+      <section data-screen="loading">
+        <p class="muted" style="text-align: center">Connecting…</p>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/common.js"></script>
+    <script src="/js/player.js"></script>
+  </body>
+</html>

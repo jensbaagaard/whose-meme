@@ -1,0 +1,27 @@
+# systemd unit for the droplet.
+#   sudo cp deploy/whose-meme.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now whose-meme
+[Unit]
+Description=Whose Meme? party game
+After=network.target
+
+[Service]
+Type=simple
+User=whosememe
+WorkingDirectory=/opt/whose-meme
+ExecStart=/usr/bin/node server.js
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Only nginx should reach the app.
+Environment=HOST=127.0.0.1
+Restart=always
+RestartSec=2
+
+# Hardening: the app needs no disk writes and no extra privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

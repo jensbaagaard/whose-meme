@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#15121f" />
+    <title>Whose Meme? · Main screen</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="host">
+      <header class="host-top">
+        <div class="logo">Whose <span>Meme?</span></div>
+        <div id="top-right"></div>
+      </header>
+
+      <main class="host-main">
+        <!-- lobby -->
+        <section data-screen="lobby" class="host-main" hidden>
+          <div class="lobby-grid">
+            <div class="join-card">
+              <div class="muted">Join on your phone at</div>
+              <div class="join-url" id="join-url"></div>
+              <div class="muted">with the code</div>
+              <div class="room-code" id="room-code"></div>
+              <img class="qr" id="qr" alt="QR code to join" />
+            </div>
+            <div class="player-grid" id="player-grid"></div>
+          </div>
+          <footer class="lobby-footer">
+            <div>
+              <div class="pool" id="pool"></div>
+              <div class="muted" id="start-problem"></div>
+            </div>
+            <button class="big-button" id="start">Start the game</button>
+          </footer>
+        </section>
+
+        <!-- guessing -->
+        <section data-screen="guessing" class="meme-stage" hidden>
+          <div class="round-label" id="guess-round"></div>
+          <a class="meme-link" id="meme-link" target="_blank" rel="noopener noreferrer">
+            <span class="open">Open the meme ↗</span>
+            <span class="host-name" id="meme-host"></span>
+            <span class="full-url" id="meme-url"></span>
+          </a>
+          <div class="prompt">Who posted it? Guess on your phones!</div>
+          <div class="locked-row" id="locked-row"></div>
+          <div class="stage-actions">
+            <button class="secondary" id="reveal">Reveal now</button>
+            <button class="ghost" id="end-1">End game</button>
+          </div>
+        </section>
+
+        <!-- reveal -->
+        <section data-screen="reveal" class="host-main" hidden>
+          <div class="reveal-grid">
+            <div class="reveal-owner">
+              <div class="round-label" id="reveal-round"></div>
+              <div class="it-was">It was…</div>
+              <img class="avatar xl" id="owner-photo" alt="" />
+              <div class="owner-name" id="owner-name"></div>
+              <div class="fooled" id="fooled"></div>
+              <a class="meme-link small" id="reveal-link" target="_blank" rel="noopener noreferrer">
+                <span class="open">Watch again ↗</span>
+                <span class="host-name" id="reveal-host"></span>
+              </a>
+              <div class="guess-list" id="guess-list"></div>
+            </div>
+            <aside class="side">
+              <h2>Scores</h2>
+              <ol class="scores" id="reveal-scores"></ol>
+              <div class="stage-actions" style="margin-top: 1.5em">
+                <button class="big-button" id="next">Next meme →</button>
+              </div>
+              <div class="stage-actions">
+                <button class="ghost" id="end-2">End game</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- game over -->
+        <section data-screen="over" class="podium" hidden>
+          <div class="winner" id="winner"></div>
+          <ol class="scores" id="final-scores"></ol>
+          <div class="stage-actions">
+            <button class="big-button" id="again">Play again</button>
+            <button class="secondary" id="new-room-2">New room</button>
+          </div>
+        </section>
+
+        <section data-screen="loading" class="meme-stage">
+          <p class="muted">Connecting…</p>
+        </section>
+      </main>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/common.js"></script>
+    <script src="/js/host.js"></script>
+  </body>
+</html>
